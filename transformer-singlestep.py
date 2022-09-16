@@ -19,8 +19,12 @@ np.random.seed(0)
 
 input_window = 100 # number of input steps
 output_window = 1 # number of prediction steps, in this model its fixed to one
-batch_size = 10 
+batch_size = 64
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+from sklearn.preprocessing import MinMaxScaler
+scaler = MinMaxScaler(feature_range=(-1, 1))
+
 
 class PositionalEncoding(nn.Module):
 
@@ -40,11 +44,13 @@ class PositionalEncoding(nn.Module):
           
 
 class TransAm(nn.Module):
-    def __init__(self,feature_size=250,num_layers=1,dropout=0.1):
+    def __init__(self,feature_size=250 ,num_layers=1,dropout=0.1):
         super(TransAm, self).__init__()
         self.model_type = 'Transformer'
         
         self.src_mask = None
+        self.encoder_input_layer = nn.Linear(1, feature_size)
+
         self.pos_encoder = PositionalEncoding(feature_size)
         self.encoder_layer = nn.TransformerEncoderLayer(d_model=feature_size, nhead=10, dropout=dropout)
         self.transformer_encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=num_layers)        
@@ -61,7 +67,7 @@ class TransAm(nn.Module):
             device = src.device
             mask = self._generate_square_subsequent_mask(len(src)).to(device)
             self.src_mask = mask
-
+        src = self.encoder_input_layer(src)
         src = self.pos_encoder(src)
         output = self.transformer_encoder(src,self.src_mask)#, self.src_mask)
         output = self.decoder(output)
@@ -90,23 +96,25 @@ def get_data():
     # construct a littel toy dataset
     time        = np.arange(0, 400, 0.1)    
     amplitude   = np.sin(time) + np.sin(time*0.05) +np.sin(time*0.12) *np.random.normal(-0.2, 0.2, len(time))
+    #loading weather data from a file
+    from pandas import read_csv
+    # series = read_csv('daily-min-temperatures.csv', header=0, index_col=0, parse_dates=True, squeeze=True)
+    series = read_csv('dfs_merged_upload.csv', header=0, index_col=0, parse_dates=True, squeeze=True)
+    series = series['FCR_N_PriceEUR']
+    print(series)
+
+    # looks like normalizing input values curtial for the model
+
+
+    amplitude = scaler.fit_transform(series.to_numpy().reshape(-1, 1)).reshape(-1)
+    # amplitude = scaler.fit_transform(amplitude.reshape(-1, 1)).reshape(-1)
 
     
-    from sklearn.preprocessing import MinMaxScaler
-    
-    #loading weather data from a file
-    #from pandas import read_csv
-    #series = read_csv('daily-min-temperatures.csv', header=0, index_col=0, parse_dates=True, squeeze=True)
-    
-    # looks like normalizing input values curtial for the model
-    scaler = MinMaxScaler(feature_range=(-1, 1)) 
-    #amplitude = scaler.fit_transform(series.to_numpy().reshape(-1, 1)).reshape(-1)
-    amplitude = scaler.fit_transform(amplitude.reshape(-1, 1)).reshape(-1)
-    
-    
     sampels = 2600
+    sampels = 40000
     train_data = amplitude[:sampels]
     test_data = amplitude[sampels:]
+
 
     # convert our train data into a pytorch train tensor
     #train_tensor = torch.FloatTensor(train_data).view(-1)
@@ -119,6 +127,15 @@ def get_data():
     test_data = test_data[:-output_window] #todo: fix hack?
 
     return train_sequence.to(device),test_data.to(device)
+
+
+
+
+
+
+
+
+
 
 def get_batch(source, i,batch_size):
     seq_len = min(batch_size, len(source) - 1 - i)
@@ -137,6 +154,7 @@ def train(train_data):
         data, targets = get_batch(train_data, i,batch_size)
         optimizer.zero_grad()
         output = model(data)
+
         loss = criterion(output, targets)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 0.7)
@@ -150,7 +168,7 @@ def train(train_data):
             print('| epoch {:3d} | {:5d}/{:5d} batches | '
                   'lr {:02.6f} | {:5.2f} ms | '
                   'loss {:5.5f} | ppl {:8.2f}'.format(
-                    epoch, batch, len(train_data) // batch_size, scheduler.get_lr()[0],
+                    epoch, batch, len(train_data) // batch_size, scheduler.get_last_lr()[0],
                     elapsed * 1000 / log_interval,
                     cur_loss, math.exp(cur_loss)))
             total_loss = 0
@@ -159,6 +177,8 @@ def train(train_data):
 def plot_and_loss(eval_model, data_source,epoch):
     eval_model.eval() 
     total_loss = 0.
+
+
     test_result = torch.Tensor(0)    
     truth = torch.Tensor(0)
     with torch.no_grad():
@@ -166,6 +186,8 @@ def plot_and_loss(eval_model, data_source,epoch):
             data, target = get_batch(data_source, i,1)
             output = eval_model(data)            
             total_loss += criterion(output, target).item()
+
+
             test_result = torch.cat((test_result, output[-1].view(-1).cpu()), 0)
             truth = torch.cat((truth, target[-1].view(-1).cpu()), 0)
             
@@ -209,18 +231,42 @@ def predict_future(eval_model, data_source,steps):
 def evaluate(eval_model, data_source):
     eval_model.eval() # Turn on the evaluation mode
     total_loss = 0.
+    total_diff = 0.
     eval_batch_size = 1000
     with torch.no_grad():
         for i in range(0, len(data_source) - 1, eval_batch_size):
             data, targets = get_batch(data_source, i,eval_batch_size)
-            output = eval_model(data)            
+
+            output = eval_model(data)
+
+
             total_loss += len(data[0])* criterion(output, targets).cpu().item()
-    return total_loss / len(data_source)
+            total_diff += len(data[0])* metrix(output, targets)
+
+
+    return total_loss / len(data_source), total_diff / len(data_source)
+
+def ScaledRMSE(scaler):
+    def RMSE(yhat,y):
+        yhat = yhat[-1]
+        y = y[-1]
+        yhat = scaler.inverse_transform(yhat.cpu())
+        y = scaler.inverse_transform(y.cpu())
+        return np.sqrt(np.mean((yhat-y)**2))
+    return RMSE
 
 train_data, val_data = get_data()
+
 model = TransAm().to(device)
 
 criterion = nn.MSELoss()
+metrix = ScaledRMSE(scaler)
+
+
+
+
+
+
 lr = 0.005 
 #optimizer = torch.optim.SGD(model.parameters(), lr=lr)
 optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
@@ -233,26 +279,18 @@ best_model = None
 for epoch in range(1, epochs + 1):
     epoch_start_time = time.time()
     train(train_data)
-    
-    if(epoch % 10 is 0):
-        val_loss = plot_and_loss(model, val_data,epoch)
-        predict_future(model, val_data,200)
-    else:
-        val_loss = evaluate(model, val_data)
+    val_loss, val_diff = evaluate(model, val_data)
+
+    if(epoch % 10 == 0):
+        plot_and_loss(model, val_data,epoch)
    
     print('-' * 89)
-    print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.5f} | valid ppl {:8.2f}'.format(epoch, (time.time() - epoch_start_time),
-                                     val_loss, math.exp(val_loss)))
+    print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.5f} | valid ppl {:8.2f} | valid diff{:8.2f}'.format(epoch, (time.time() - epoch_start_time),
+                                     val_loss, math.exp(val_loss), val_diff))
     print('-' * 89)
 
-    #if val_loss < best_val_loss:
-    #    best_val_loss = val_loss
-    #    best_model = model
+    if val_loss < best_val_loss:
+       best_val_loss = val_loss
+       best_model = model
 
-    scheduler.step() 
-
-#src = torch.rand(input_window, batch_size, 1) # (source sequence length,batch size,feature number) 
-#out = model(src)
-#
-#print(out)
-#print(out.shape)
+    scheduler.step()
