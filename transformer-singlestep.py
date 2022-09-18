@@ -36,17 +36,22 @@ class PositionalEncoding(nn.Module):
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
         pe = pe.unsqueeze(0).transpose(0, 1)
-        #pe.requires_grad = False
+        pe =pe.permute(1,0,2)
         self.register_buffer('pe', pe)
 
     def forward(self, x):
-        pos = self.pe[:x.size(0), :]
+        # print("==============")
+        # print(x.shape)
+        # pos = self.pe[:x.size(0), :]
+        pos = self.pe[:, : x.size(1)]
+        # print(pos.shape)
         x = x + pos
+        # print(x.shape)
         return x
           
 
 class TransAm(nn.Module):
-    def __init__(self,feature_size=16 ,num_layers=1,dropout=0.1):
+    def __init__(self,feature_size=16 ,num_layers=2,dropout=0.2):
         super(TransAm, self).__init__()
         self.model_type = 'Transformer'
         
@@ -54,7 +59,7 @@ class TransAm(nn.Module):
         self.encoder_input_layer = nn.Linear(1, feature_size)
 
         self.pos_encoder = PositionalEncoding(feature_size)
-        self.encoder_layer = nn.TransformerEncoderLayer(d_model=feature_size, nhead=8, dropout=dropout)
+        self.encoder_layer = nn.TransformerEncoderLayer(d_model=feature_size, nhead=8, dropout=dropout, batch_first=True)
         self.transformer_encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=num_layers)        
         self.decoder = nn.Linear(feature_size,1)
         self.init_weights()
@@ -65,9 +70,10 @@ class TransAm(nn.Module):
         self.decoder.weight.data.uniform_(-initrange, initrange)
 
     def forward(self,src):
-        if self.src_mask is None or self.src_mask.size(0) != len(src):
+        seq_len = src.size(1)
+        if self.src_mask is None or self.src_mask.size(0) != seq_len:
             device = src.device
-            mask = self._generate_square_subsequent_mask(len(src)).to(device)
+            mask = self._generate_square_subsequent_mask(seq_len).to(device)
             self.src_mask = mask
         src = self.encoder_input_layer(src)
         src = self.pos_encoder(src)
@@ -137,7 +143,7 @@ def get_batch(source, i,batch_size):
     data = source[i:i+seq_len]    
     input = torch.stack(torch.stack([item[0] for item in data]).chunk(input_window,1)) # 1 is feature size
     target = torch.stack(torch.stack([item[1] for item in data]).chunk(input_window,1))
-    return input, target
+    return input.permute(1,0,2), target.permute(1,0,2)
 
 def train(train_data):
     model.train() # Turn on the train mode \o/
@@ -146,6 +152,7 @@ def train(train_data):
 
     for batch, i in enumerate(range(0, len(train_data) - 1, batch_size)):
         data, targets = get_batch(train_data, i,batch_size)
+
         optimizer.zero_grad()
         output = model(data)
         # print(output.size())
@@ -161,7 +168,7 @@ def train(train_data):
             cur_loss = total_loss / log_interval
             elapsed = time.time() - start_time
             print('| epoch {:3d} | {:5d}/{:5d} batches | '
-                  'lr {:02.6f} | {:5.2f} ms | '
+                  'lr {:02.8f} | {:5.2f} ms | '
                   'loss {:5.5f} | ppl {:8.2f}'.format(
                     epoch, batch, len(train_data) // batch_size, scheduler.get_last_lr()[0],
                     elapsed * 1000 / log_interval,
@@ -180,49 +187,25 @@ def plot_and_loss(eval_model, data_source,epoch):
         for i in range(0, len(data_source) - 1):
             data, target = get_batch(data_source, i,1)
             output = eval_model(data)
+            output = output[:, -1].view(-1).cpu()
+            tt = target[:, -1].view(-1).cpu()
 
-            total_loss += criterion(output, target).item()
-
-
-            test_result = torch.cat((test_result, output[-1].view(-1).cpu()), 0)
-            truth = torch.cat((truth, target[-1].view(-1).cpu()), 0)
+            test_result = torch.cat((test_result,output), 0)
+            truth = torch.cat((truth,tt), 0)
             
     #test_result = test_result.cpu().numpy() -> no need to detach stuff.. 
     len(test_result)
 
     pyplot.plot(test_result,color="red")
-    pyplot.plot(truth[:500],color="blue")
+    pyplot.plot(truth[:4000],color="blue")
     pyplot.plot(test_result-truth,color="green")
     pyplot.grid(True, which='both')
     pyplot.axhline(y=0, color='k')
     pyplot.savefig('graph/transformer-epoch%d.png'%epoch)
     pyplot.close()
-    
-    return total_loss / i
 
 
-# predict the next n steps based on the input data 
-def predict_future(eval_model, data_source,steps):
-    eval_model.eval() 
-    total_loss = 0.
-    test_result = torch.Tensor(0)    
-    truth = torch.Tensor(0)
-    data, _ = get_batch(data_source, 0,1)
-    with torch.no_grad():
-        for i in range(0, steps):            
-            output = eval_model(data[-input_window:])                        
-            data = torch.cat((data, output[-1:]))
-            
-    data = data.cpu().view(-1)
-    
-    # I used this plot to visualize if the model pics up any long therm struccture within the data. 
-    pyplot.plot(data,color="red")       
-    pyplot.plot(data[:input_window],color="blue")    
-    pyplot.grid(True, which='both')
-    pyplot.axhline(y=0, color='k')
-    pyplot.savefig('graph/transformer-future%d.png'%steps)
-    pyplot.close()
-        
+
 
 def evaluate(eval_model, data_source):
     eval_model.eval() # Turn on the evaluation mode
@@ -236,16 +219,16 @@ def evaluate(eval_model, data_source):
             output = eval_model(data)
 
 
-            total_loss += len(data[0])* criterion(output, targets).cpu().item()
-            total_diff += len(data[0])* metrix(output, targets)
+            total_loss += len(data)* criterion(output, targets).cpu().item()
+            total_diff += len(data)* metrix(output, targets)
 
 
     return total_loss / len(data_source), total_diff / len(data_source)
 
 def ScaledRMSE(scaler):
     def RMSE(yhat,y):
-        yhat = yhat[-1]
-        y = y[-1]
+        yhat = yhat[:, -1]
+        y = y[:, -1]
         yhat = scaler.inverse_transform(yhat.cpu())
         y = scaler.inverse_transform(y.cpu())
         return np.sqrt(np.mean((yhat-y)**2))
@@ -266,7 +249,7 @@ metrix = ScaledRMSE(scaler)
 lr = 0.005 
 #optimizer = torch.optim.SGD(model.parameters(), lr=lr)
 optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
-scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.96)
+scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.99)
 
 best_val_loss = float("inf")
 epochs = 10000 # The number of epochs
