@@ -51,7 +51,7 @@ class PositionalEncoding(nn.Module):
           
 
 class TransAm(nn.Module):
-    def __init__(self,feature_size=16 ,num_layers=2,dropout=0.2):
+    def __init__(self,feature_size=16 ,num_layers=1,dropout=0.2):
         super(TransAm, self).__init__()
         self.model_type = 'Transformer'
         
@@ -195,10 +195,9 @@ def plot_and_loss(eval_model, data_source,epoch):
             
     #test_result = test_result.cpu().numpy() -> no need to detach stuff.. 
     len(test_result)
-
-    pyplot.plot(test_result,color="red")
-    pyplot.plot(truth[:4000],color="blue")
-    pyplot.plot(test_result-truth,color="green")
+    pyplot.plot(truth[:4000], color="blue" , linewidth=0.5)
+    pyplot.plot(test_result,color="red", linewidth=0.5)
+    pyplot.plot(test_result-truth,color="green", linewidth=0.5)
     pyplot.grid(True, which='both')
     pyplot.axhline(y=0, color='k')
     pyplot.savefig('graph/transformer-epoch%d.png'%epoch)
