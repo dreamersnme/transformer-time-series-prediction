@@ -46,7 +46,7 @@ class PositionalEncoding(nn.Module):
           
 
 class TransAm(nn.Module):
-    def __init__(self,feature_size=128 ,num_layers=1,dropout=0.1):
+    def __init__(self,feature_size=16 ,num_layers=1,dropout=0.1):
         super(TransAm, self).__init__()
         self.model_type = 'Transformer'
         
@@ -132,20 +132,12 @@ def get_data():
 
 
 
-
-
-
-
-
-
-
 def get_batch(source, i,batch_size):
     seq_len = min(batch_size, len(source) - 1 - i)
     data = source[i:i+seq_len]    
     input = torch.stack(torch.stack([item[0] for item in data]).chunk(input_window,1)) # 1 is feature size
     target = torch.stack(torch.stack([item[1] for item in data]).chunk(input_window,1))
     return input, target
-
 
 def train(train_data):
     model.train() # Turn on the train mode \o/
@@ -156,6 +148,7 @@ def train(train_data):
         data, targets = get_batch(train_data, i,batch_size)
         optimizer.zero_grad()
         output = model(data)
+        # print(output.size())
 
         loss = criterion(output, targets)
         loss.backward()
@@ -186,7 +179,8 @@ def plot_and_loss(eval_model, data_source,epoch):
     with torch.no_grad():
         for i in range(0, len(data_source) - 1):
             data, target = get_batch(data_source, i,1)
-            output = eval_model(data)            
+            output = eval_model(data)
+
             total_loss += criterion(output, target).item()
 
 
@@ -272,10 +266,10 @@ metrix = ScaledRMSE(scaler)
 lr = 0.005 
 #optimizer = torch.optim.SGD(model.parameters(), lr=lr)
 optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
-scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
+scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.96)
 
 best_val_loss = float("inf")
-epochs = 100 # The number of epochs
+epochs = 10000 # The number of epochs
 best_model = None
 
 for epoch in range(1, epochs + 1):
