@@ -40,11 +40,13 @@ class PositionalEncoding(nn.Module):
         self.register_buffer('pe', pe)
 
     def forward(self, x):
-        return x + self.pe[:x.size(0), :]
+        pos = self.pe[:x.size(0), :]
+        x = x + pos
+        return x
           
 
 class TransAm(nn.Module):
-    def __init__(self,feature_size=250 ,num_layers=1,dropout=0.1):
+    def __init__(self,feature_size=128 ,num_layers=1,dropout=0.1):
         super(TransAm, self).__init__()
         self.model_type = 'Transformer'
         
@@ -52,7 +54,7 @@ class TransAm(nn.Module):
         self.encoder_input_layer = nn.Linear(1, feature_size)
 
         self.pos_encoder = PositionalEncoding(feature_size)
-        self.encoder_layer = nn.TransformerEncoderLayer(d_model=feature_size, nhead=10, dropout=dropout)
+        self.encoder_layer = nn.TransformerEncoderLayer(d_model=feature_size, nhead=8, dropout=dropout)
         self.transformer_encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=num_layers)        
         self.decoder = nn.Linear(feature_size,1)
         self.init_weights()
